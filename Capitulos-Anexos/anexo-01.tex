@@ -1,0 +1,519 @@
+\chapter{Anexos}
+
+\section{Código en Fortran con el método EMD}\label{EMD_code}
+
+\begin{spacing}{1.}
+\begin{lstlisting}
+!============================================================================
+!Module containing subroutines to perform the emd algorithm
+!============================================================================
+module emd_mod
+  implicit none
+  integer, parameter :: dp = selected_real_kind(15, 307)
+  contains
+!----------------------------------------------------------------------------
+!Adds an element to an array
+!----------------------------------------------------------------------------
+  subroutine append(array, element)
+    integer :: i, insize
+    real(dp), intent(in) :: element
+    real(dp), dimension(:), allocatable, intent(inout) :: array
+    real(dp), dimension(:), allocatable :: outlist
+
+    if(allocated(array)) then
+      insize = size(array)
+      allocate(outlist(insize+1))
+      do i=1,insize          
+        outlist(i) = array(i)
+      end do
+      outlist(insize+1) = element
+      deallocate(array)
+      call move_alloc(outlist, array) 
+    else
+      allocate(array(1))
+      array(1) = element
+    end if
+  end subroutine append
+!----------------------------------------------------------------------------
+!Finds the local maxima and minima of an array and its positions in x-axis 
+!----------------------------------------------------------------------------
+  subroutine findLocalMaximaMinima(x, array, x_minima, minima, x_maxima, maxima)
+    integer :: N, i, m, num_minima, num_maxima
+    real(dp), intent(in) :: x(:), array(:)
+    real(dp), dimension(:), intent(inout), allocatable :: x_minima, minima, &
+       x_maxima, maxima
+    real(dp), dimension(:), allocatable :: x_aux, y_aux 
+
+    allocate(x_minima(0), minima(0), x_maxima(0), maxima(0))
+    N = size(array)
+    num_minima = 0
+    num_maxima = 0
+    do i=2, N-1
+      !condition for local minima
+      if((array(i-1)>array(i)).and.(array(i)<array(i+1))) then 
+        call append(x_minima, x(i))
+        call append(minima, array(i))
+        num_minima = num_minima + 1
+      !condition for local maxima
+      else if((array(i-1)<array(i)).and.(array(i)>array(i+1))) then 
+        call append(x_maxima, x(i))
+        call append(maxima, array(i))
+        num_maxima = num_maxima + 1
+      end if
+    end do
+    
+    !Boundary conditions to perform Cubic Splines
+    !This adds 2 values to local maxima and minima: 4 in total
+    !To get the exact number, the size of each must be reduced by  2
+    if((num_minima .ne. 0).and.(num_maxima .ne. 0)) then
+    !boundary conditions for minima
+      m = size(x_minima)
+      allocate(x_aux(m+2), y_aux(m+2))
+      x_aux(1) = x(1)
+      x_aux(2:m+1) = x_minima(1:m)
+      x_aux(m+2) = x(N)
+      y_aux(1) = minima(1)
+      y_aux(2:m+1) = minima(1:m)
+      y_aux(m+2) = minima(m)
+      deallocate(x_minima, minima)
+      allocate(x_minima(m+2), minima(m+2))
+      x_minima = x_aux
+      minima = y_aux 
+      deallocate(x_aux, y_aux)
+
+    !boundary conditions for maxima
+      m = size(x_maxima)
+      allocate(x_aux(m+2), y_aux(m+2))
+      x_aux(1) = x(1)
+      x_aux(2:m+1) = x_maxima(1:m)
+      x_aux(m+2) = x(N)
+      y_aux(1) = maxima(1)
+      y_aux(2:m+1) = maxima(1:m)
+      y_aux(m+2) = maxima(m)
+      deallocate(x_maxima, maxima)
+      allocate(x_maxima(m+2), maxima(m+2))
+      x_maxima = x_aux
+      maxima = y_aux 
+      deallocate(x_aux, y_aux)
+    end if
+  end subroutine
+!----------------------------------------------------------------------------
+!Performs Cubic Splines using 'x', 'y' and 'x_splines' vectors as input and 
+!returns 'y_splines' vector as output, interpolating the data in 'y'  
+!----------------------------------------------------------------------------
+  subroutine cubic_splines(x, y, x_splines, y_splines)
+    real(dp), dimension(:), intent(in) :: x, y, x_splines
+    real(dp), dimension(:), intent(inout) :: y_splines
+    real(dp), dimension(:), allocatable :: b, h, c, d, l, dd, u
+    integer :: i, j, k, Nnodes, N_splines
+    real(dp) :: xinter, yinter
+
+    Nnodes = size(x)
+    N_splines = size(x_splines)
+    allocate(b(Nnodes),h(Nnodes-1),c(Nnodes-1),d(Nnodes-1),l(Nnodes), &
+      dd(Nnodes),u(Nnodes)) 
+
+    !Tridiagonal matrix and vector of coefficients for the method
+    !A(l, dd, u)x = b   
+    do i = 1, Nnodes-1
+      h(i) = x(i+1)-x(i)
+      l(i+1) = 1.0_dp/h(i)
+      u(i) = 1.0_dp/h(i)
+      if(i>1) then 
+        dd(i) = 1./h(i-1) + 1.0_dp/h(i)
+        b(i) = y(i+1)/(h(i)*h(i)) + y(i)*(1./(h(i-1)*h(i-1))-1./(h(i)*h(i))) - &
+          y(i-1)/(h(i-1)*h(i-1))
+      end if
+    end do !i
+    dd(1) = 1.0_dp/h(1)
+    dd(Nnodes) = 1.0_dp/h(Nnodes-1)
+    dd(1:Nnodes) = 2.0_dp*dd(1:Nnodes)
+    b(1) = (y(2)-y(1))/(h(1)*h(1))
+    b(Nnodes) = (y(Nnodes)-y(Nnodes-1))/(h(Nnodes-1)*h(Nnodes-1))
+    b(1:Nnodes) = 3.0_dp*b(1:Nnodes)
+
+    !Solution of the linear system
+    do i=2,Nnodes
+      l(i) = l(i)/dd(i-1)
+      dd(i) = dd(i) - l(i)*u(i-1)
+      b(i) = b(i)-l(i)*b(i-1)
+    end do !i
+    b(Nnodes) = b(Nnodes)/dd(Nnodes)
+    do i = Nnodes-1, 1, -1
+      b(i) = (b(i) - u(i)*b(i+1))/dd(i)
+    end do !i
+
+    !Cubic Splines Interpolation
+    do i = 1, Nnodes-1
+      c(i) = 3.0_dp*(y(i+1)-y(i))/(h(i)*h(i))-2.0_dp*b(i)/h(i)-b(i+1)/h(i)
+      d(i) = 2.0_dp*(y(i)-y(i+1))/(h(i)**3) + (b(i)+b(i+1))/(h(i)*h(i))
+    end do 
+    j = 1
+    do i = 1, N_splines
+      xinter = x_splines(i)
+      do k = 1, Nnodes-1
+        if((x(k)<xinter).and.(xinter < x(k+1))) j = k
+      end do !k
+      yinter = y(j) + b(j)*(xinter-x(j)) + c(j)*(xinter-x(j))*(xinter-x(j)) + &
+        d(j)*(xinter-x(j))**3 
+      y_splines(i) = yinter
+    end do !i
+    deallocate(h,b,c,d,l,dd,u)  
+  end subroutine
+!----------------------------------------------------------------------------
+!Performs the main steps in the sifting process.
+!It takes 'x' and 'y' as input vectors and returns a proto-IMF 'hk' and also
+!'mean' and 'diff_extremas_zeros' in order to check if 'hk' is an IMF.
+!----------------------------------------------------------------------------
+  subroutine sifting_steps(x, y, hk, mean, diff_extremas_zeros)
+    real(dp), dimension(:), intent(in) :: x, y
+    real(dp), dimension(:), intent(inout) :: hk
+    real(dp), dimension(:), allocatable :: x_minima, minima, x_maxima, maxima, &
+      ys_low, ys_up, ys_mean
+    integer, intent(inout) :: diff_extremas_zeros
+    real(dp), intent(inout) :: mean
+    integer :: N_file, i, number_zero_crossings
+
+    N_file = size(x) 
+    call findLocalMaximaMinima(x, y, x_minima, minima, x_maxima, maxima) 
+    allocate(ys_low(N_file))
+    call cubic_splines(x_minima, minima, x, ys_low)
+    allocate(ys_up(N_file))
+    call cubic_splines(x_maxima, maxima, x, ys_up)
+    allocate(ys_mean(N_file))
+    ys_mean = 0.5*(ys_low + ys_up)
+
+    hk = y - ys_mean
+    mean = 0.0_dp
+    do i = 1, N_file
+      mean = mean + hk(i)
+    end do
+    mean = mean/N_file
+
+    number_zero_crossings = 0
+    do i = 1, N_file - 1
+      if(hk(i)*hk(i+1) < 0) number_zero_crossings = number_zero_crossings + 1
+    end do
+
+    diff_extremas_zeros = abs(size(maxima)+size(minima)-number_zero_crossings - 4)
+    !We subtract 4 to correct the size of maxima and minima
+    deallocate(x_minima, minima, x_maxima, maxima, ys_low, ys_up, ys_mean)
+  end subroutine
+!----------------------------------------------------------------------------
+!Standard Deviation criterion to stop the sifting process
+!----------------------------------------------------------------------------
+  subroutine stopping_criterion1(hkm1, hk, SD)
+    real(dp), dimension(:), intent(in) :: hkm1, hk
+    real(dp), intent(inout) :: SD
+    integer :: i, total_time
+    real(dp), parameter :: eps=1e-8
+
+    total_time = size(hk)
+    SD = 0.0_dp
+    do  i = 1, total_time
+        SD = SD + abs(hk(i)-hkm1(i))*abs(hk(i)-hkm1(i))/(hkm1(i)*hkm1(i)+eps)
+    end do
+  end subroutine
+!----------------------------------------------------------------------------
+!Evaluates if the input parameters guarantee an IMF
+!----------------------------------------------------------------------------
+  subroutine is_imf(param1, param2, success_imf)
+    !Difference between the number of extremas and zero crossings
+    integer, intent(in) :: param1 
+    real(dp), intent(in) :: param2 !mean of Proto-IMFs
+    logical, intent(inout) :: success_imf
+    real(dp), parameter :: eps_mean = 4e-2 !chosen mean tolerance
+
+    if((param1 <= 1) .and. (abs(param2) <= eps_mean)) then 
+      success_imf = .true.
+    else
+      success_imf = .false.
+    end if
+  end subroutine
+!----------------------------------------------------------------------------
+!Evaluates the number of extremas of the residue to stop the decomposition
+!----------------------------------------------------------------------------
+  subroutine residual_condition(x, r, num_residual_extremas)
+    real(dp), dimension(:), intent(in) :: x, r
+    integer, intent(inout) :: num_residual_extremas
+    real(dp), dimension(:), allocatable :: rx_minima, r_minima, rx_maxima, r_maxima
+    integer :: size_minima, size_maxima
+
+    !Precision correction in the residual values. 
+    !This avoids getting wrong IMFs.
+    call findLocalMaximaMinima(x, anint(r*1e8)/1e8, rx_minima, r_minima, & 
+      rx_maxima, r_maxima)
+    size_minima = size(r_minima)
+    size_maxima = size(r_maxima)
+    !Size correction for minima and maxima
+    if((size_minima.ne.0).and.(size_maxima.ne.0)) then 
+      num_residual_extremas = size_minima + size_maxima - 4
+    else
+      num_residual_extremas = 0
+    end if
+    deallocate(rx_minima, r_minima, rx_maxima, r_maxima)
+  end subroutine 
+end module
+!============================================================================
+!Main program to perform EMD method on magnetic time series.
+!============================================================================
+program emd
+  use emd_mod
+  implicit none
+
+  !MAX_IMFs~log2(N): in this case MAX_IMFs~ 16, 17: expected number of IMFs
+  !MAX_PMFs: maximum number of iterations to perform the sifting process
+  integer, parameter :: MAX_IMFs=16 + 2, MAX_PMFs=20
+  real, parameter :: SD_threshold = 0.3_dp
+  integer :: io1=1, io2=2
+  integer :: N_file
+  real(dp), dimension(:), allocatable :: x, y, hkm1, hk, rj, & 
+    time, Br, Bn, Bt, B
+  integer :: i, diff_extremas_zeros, num_residual_extremas, num_IMFs, it_sift
+  character (len=80) :: nfout
+  real(dp) :: mean, SD
+  logical :: success_imf
+
+  !size of time series data, name of output file with IMFs
+  N_file = 62400 !PSP
+  nfout = 'imfs_PSP_Br.dat'  
+  !N_file = 115201 !SolO
+  !nfout = 'imfs_SolO_B.dat'    
+  nfout = trim(nfout)
+
+  allocate(x(N_file), y(N_file), hk(N_file), hkm1(N_file), rj(N_file), &
+    time(N_file), Br(N_file), Bt(N_file), Bn(N_file), B(N_file))
+
+  !data reading
+  open(unit=io1, file='pspr_20200927_0305_20200927_0515.txt', action='read')
+  !open(unit=io1, file='solo_20201001_2120_20201002_0120.txt', action='read')
+  do i = 1, N_file
+    read(io1, *) time(i), Br(i), Bt(i), Bn(i), B(i)
+  end do 
+  close(io1)
+
+  !variables on which the EMD method will be applied
+  x(1:N_file) = time(1:N_file)/8.0_dp !sample rate = 8Hz
+  y(1:N_file) = Br(1:N_file)
+
+  open(unit=io2, file=nfout, status='unknown', action='write')
+  
+  !Residual condition: monotonous or constant behavior: at most 1 extrema
+  num_residual_extremas = 2
+  num_IMFs = 0
+  rj = y !initial condition for residue
+!---------------------------------EMD---------------------------------------
+  do while((num_residual_extremas>1).and.(num_IMFs<MAX_IMFs))
+    num_IMFs = num_IMFs + 1
+    print*, 'IMF: ', num_IMFs
+    hkm1 = rj
+
+    !------------------------SIFTING----------------------------------------
+    SD = 1.0_dp
+    it_sift = 0
+    do while((SD>SD_threshold).and.(it_sift<MAX_PMFs))
+      it_sift = it_sift + 1
+      hk = 0.0_dp
+      call sifting_steps(x, hkm1, hk, mean, diff_extremas_zeros)
+      call is_imf(diff_extremas_zeros, mean, success_imf)
+      call stopping_criterion1(hkm1, hk, SD)
+      !condition to stop sifting
+      if(success_imf.eqv.(.true.)) exit
+      hkm1 = hk
+    end do !end of sifting process
+    
+    !report of sifting results 
+    write(*, "(A5, I2, A10, I5, A8, E20.8, A7, L1, A12, F20.8)") &
+      '#it: ', it_sift, '| param1: ', diff_extremas_zeros, &
+        '| mean: ', mean, '| imf: ', success_imf, '| criterion: ', SD
+
+    if(it_sift==MAX_PMFs) then 
+      print*, 'Approximated sifting'
+    else if (SD<0.3_dp) then 
+      print*, 'SD condition achieved'
+    end if
+
+    !residue update
+    rj = rj - hk
+    write(io2, *) hk
+    call residual_condition(x, rj, num_residual_extremas)
+    print*, '|---------Extrema of residue---------|', num_residual_extremas
+  end do !end of EMD
+
+  write(io2, *) rj
+
+  print*, 'Extrema of residue: ', num_residual_extremas
+  print*, 'Number of IMFS: ', num_IMFs
+
+  deallocate(x, y, hkm1, hk, rj, time, Br, Bn, Bt, B)
+  close(io2)
+end program
+!============================================================================
+\end{lstlisting}
+\end{spacing}
+
+\section{Código en Python para realizar el barrido sobre las ventanas de tiempo y el número de IMFs}\label{xcorr_scan_code}
+
+\begin{spacing}{1.}
+\begin{minted}{python}
+#=============================================================================
+#Program to perform the cross-correlation scan on the time windows and on 
+#the number of IMFS
+#=============================================================================
+#libraries
+import numpy as np
+import emd as emd2
+import numba
+from numba import jit
+import seaborn as sns; sns.set_theme()
+
+#data
+psp_data = np.loadtxt('pspr_20200927_0305_20200927_0515.txt')
+psp_data = np.transpose(psp_data)
+psp_data[0] = psp_data[0]/8.
+solo_data = np.loadtxt('solo_20201001_2120_20201002_0120.txt')
+solo_data = np.transpose(solo_data)
+solo_data[0] = solo_data[0]/8.
+#-----------------------------------------------------------------------------
+#Functions
+#-----------------------------------------------------------------------------
+#Cross-Correlation function
+@numba.jit
+def cross_corr(x, y):
+  n = len(x)
+  mean_x = np.mean(x)
+  mean_y = np.mean(y)
+  std_x = np.std(x)
+  std_y = np.std(y)
+
+  xcorr = []
+  for k in range(n):
+    suma = 0.
+    for i in range(n-k):
+      suma += (x[i]-mean_x)*(y[i+k]-mean_y)
+    xcorr.append(suma)
+  xcorr = np.array(xcorr)/(n*std_x*std_y)
+  return xcorr
+
+#Function to get the partitions of PSP and SolO (portion of the signals) 
+#of the correlation values from the maximum to the minimum
+def get_jixcorrs(W):
+  length = np.size(W)
+  aux = np.reshape(W, (1, length))
+  aux2 = np.sort(aux, kind='quicksort')
+  aux3 = [np.where(W == aux2[0][i]) for i in range(length)]
+  indexs = []
+  for k in range(length):
+    i, = aux3[k][1]
+    j, = aux3[k][0]
+    indexs.append([j, i, W[j][i]])
+  indexs = indexs[::-1]
+  return indexs
+#Funtion to perform the cross-correlation scan on the number of IMFS
+def params_xcorr(field_component, time_min, delay_min):
+  #EMD parameters
+  config = emd2.sift.get_config('sift')
+  config['imf_opts/sd_thresh'] = 0.3
+
+  #parameters
+  T1 = 62400 #130 min PSP
+  T2 = 115201 #240 min SolO
+  time_width = time_min*60*8
+  delay = delay_min*60*8 #time to change from one partition to another 
+  n_inter1 = int(np.floor((T1-time_width)/delay)) + 1
+  n_inter2 = int(np.floor((T2-time_width)/delay)) + 1
+  Tp1 = time_width + delay*(n_inter1-1) #<=T1
+  Tp2 = time_width + delay*(n_inter2-1) #<=T2
+
+  #data
+  x1 = psp_data[field_component][:Tp1]
+  x2 = solo_data[field_component][:Tp2]
+  
+  #EMD
+  imf1 = emd2.sift.sift(x1) #Residue included
+  imf2 = emd2.sift.sift(x2)
+  num_imfs1 = imf1.shape[1]-1
+  num_imfs2 = imf2.shape[1]-1
+  start_index_imfs1 = [i for i in range(num_imfs1)]
+  start_index_imfs2 = [i for i in range(num_imfs2)]
+
+  #SCAN
+  params = []
+  print('Time window: {} minutes'.format(time_min))
+  sum_imfs = min(start_index_imfs1[-1], start_index_imfs2[-1])
+  for k in range(sum_imfs):
+    print('# imfs added : PSP({}), SolO({})'.format(num_imfs1-k, num_imfs2-k))
+
+    #Elimination of high frequencies
+    y1 = np.sum(imf1[:, start_index_imfs1[k] : ], axis=1)
+    y2 = np.sum(imf2[:, start_index_imfs2[k] : ], axis=1)
+
+    #cross-correlation between partitions over the time series
+    #scan for a particular time window
+    xcorrs = []
+    max_lags = []
+    for i in range(n_inter1):
+      start1 = i*delay
+      end1 = time_width + i*delay
+      for j in range(n_inter2):
+        start2 = j*delay
+        end2 = time_width + j*delay
+        aux = cross_corr(y1[start1:end1], y2[start2:end2])
+        index, = np.where(aux == np.max(aux))
+        xcorrs.append(np.max(aux))
+        max_lags.append(index[0])
+
+    xcorr_map = np.reshape(xcorrs, (n_inter1, n_inter2))
+    xcorr_lags = np.reshape(max_lags, (n_inter1, n_inter2))
+    max_vals = get_jixcorrs(xcorr_map)
+
+    #map of maximum correlations
+    ticks_step = 8
+    xlabels0 = np.arange(time_min+1, time_min+delay_min*(n_inter2-1), delay_min, dtype=int)
+    ylabels0 = np.arange(time_min+1, time_min+delay_min*(n_inter1-1), delay_min, dtype=int)
+    xlabels1 = np.char.mod('%d', xlabels0)
+    ylabels1 = np.char.mod('%d', ylabels0)
+    xticks = np.arange(0, n_inter2, 1)
+    yticks = np.arange(0, n_inter1, 1)
+
+    fig, ax = plt.subplots(figsize=(width, heigth))
+    ax = sns.heatmap(xcorr_map, vmin=0, vmax=1, cmap='inferno', 
+      cbar_kws={'label': "correlation", 'pad': 0.005}, annot_kws={"size": 17})
+    plt.text(0.35, 0.9, "Maximum = {:.3f}".format(np.max(xcorr_map)), fontsize=17,
+       transform=plt.gcf().transFigure)
+    ax.invert_yaxis()
+    ax.set_xlabel(r"$t(SolO) \; [min]$", fontsize=17)
+    ax.set_ylabel(r'$t(PSP) \; [min]$', fontsize=17)  
+
+    ax.set_yticks(yticks[1::ticks_step])
+    ax.set_yticklabels(ylabels1[::ticks_step])
+    ax.set_xticks(xticks[1::ticks_step])
+    ax.set_xticklabels(xlabels1[::ticks_step])
+    plt.yticks(rotation=0)
+    #save map of maximum correlations in img folder
+    plt.savefig('img/fig-'+ str(num_imfs1 - start_index_imfs1[k]) + '&' + 
+      str(num_imfs2 - start_index_imfs2[k]) + '_' + str(time_min) + '&'+ 
+      str(delay_min) + '.png')
+    plt.close(fig)
+    
+    params.append([[time_min, delay_min, num_imfs1 - start_index_imfs1[k], 
+      num_imfs2 - start_index_imfs2[k]], max_vals, xcorr_map, xcorr_lags])
+  return params
+
+#Numba function test: needed for it to perform better
+x1 = psp_data[1]
+x2 = solo_data[1]
+test = cross_corr(x1, x2)
+#-----------------------------------------------------------------------------
+#Main part of the program: It performs the cross-correlation scan 
+#on the time windows and on the number of IMFS for some time windows.
+#-----------------------------------------------------------------------------
+time_mins = np.arange(10, 90, 2)
+delay_min = 2
+params_time = []
+
+for i in time_mins:
+    params_time.append(params_xcorr(1, i, delay_min))
+#=============================================================================
+\end{minted}
+\end{spacing}

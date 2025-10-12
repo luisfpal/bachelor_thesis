@@ -1,0 +1,53 @@
+\documentclass{TIC_FC_EPN}    
+
+\begin{document}
+    
+    \titulotic{Methods of time series data mining\\\vspace{0.3cm} Correlaciones entre espectros de series temporales magnéticas del método Empirical Mode Decomposition para datos de la Tierra y el Sol}
+
+    \profesion{Físico}
+    \estudiante{Luis Fernando Palacios Flores}
+    \correoestudiante{luis.palacios01@epn.edu.ec}
+    \director{Ramón Xulvi Brunet}
+    \correodirector{ramon.xulvi@epn.edu.ec}
+    \fecha{DMQ, Septiembre 2022}
+    
+    % Portada y documentos iniciales
+    \portada
+    \pagenumbering{roman}
+    \setcounter{page}{1}
+    \certificaciones
+    \declaracionautoria
+    
+    \include{Capitulos-Anexos/opcional.tex}
+    
+    \tableofcontents
+    \addcontentsline{toc}{section}{\textbf{ÍNDICE GENERAL}}
+    \begin{spacing}{1.22}
+        \listoffigures % En caso de no tener figuras, comentar esta línea
+    \end{spacing}    
+    \addcontentsline{toc}{section}{\textbf{ÍNDICE DE FIGURAS}}
+
+    \newpage
+    
+    \include{Capitulos-Anexos/resumen.tex}
+         
+     % Contenido
+    \pagenumbering{arabic}
+     \setcounter{page}{1}
+     \include{Capitulos-Anexos/cap-01}
+     \include{Capitulos-Anexos/cap-02}
+     \include{Capitulos-Anexos/cap-03}
+     
+     % Anexos
+     \appendix
+     \include{Capitulos-Anexos/anexo-01}
+    
+    % Bibliografía
+    \renewcommand\bibname{Referencias bibliográficas}
+    %\bibliographystyle{plain}
+    \addcontentsline{toc}{chapter}{Bibliografía}
+    %\pagenumbering{gobble}
+    \printbibliography
+    %\bibliography{referencias-tic}
+
+\end{document}
